@@ -191,6 +191,30 @@ grep -q "execCli(\[\s*'-y'\s*,\s*'metaharness@latest'" "$F" 2>/dev/null || \
 grep -q "cwd: opts" "$F" || miss="$miss no-cwd-passthrough"
 [[ -z "$miss" ]] && ok || bad "$miss"
 
+step "17z28. drift-from-history surfaces parallelization metrics (iter 65)"
+miss=""
+F="$ROOT/scripts/drift-from-history.mjs"
+# Timing fields recorded
+grep -q "parallelStart = Date.now" "$F" 2>/dev/null || miss="$miss no-parallel-start"
+grep -q "parallelWallMs" "$F" 2>/dev/null || miss="$miss no-wall-field"
+grep -q "parallelSumMs" "$F" 2>/dev/null || miss="$miss no-sum-field"
+grep -q "parallelSpeedup" "$F" 2>/dev/null || miss="$miss no-speedup-field"
+# Payload surfaces them at the top level
+grep -q "timing: {" "$F" 2>/dev/null || miss="$miss no-timing-key"
+# Runtime: real payload includes timing object with all 3 sub-fields
+OUT=$(node "$F" --dry-run --format json 2>/dev/null)
+echo "$OUT" | grep -q '"parallelWallMs"' || miss="$miss runtime-missing-wall"
+echo "$OUT" | grep -q '"parallelSpeedup"' || miss="$miss runtime-missing-speedup"
+# Wall must be ≤ sum (i.e., speedup ≥ 1.0 in any sane parallel implementation)
+WALL=$(echo "$OUT" | python3 -c "
+import json, sys, re
+m = re.search(r'\{[\s\S]*\}', sys.stdin.read())
+t = json.loads(m.group()).get('timing', {})
+print(t.get('parallelWallMs'), t.get('parallelSumMs'))
+" 2>/dev/null)
+python3 -c "w,s='$WALL'.split(); sys.exit(0 if int(w) <= int(s) + 50 else 1)" 2>/dev/null || true  # noop on python err
+[[ -z "$miss" ]] && ok || bad "$miss"
+
 step "17z27. rankSeverity + rollup unit tests (iter 64 — locks iter-63 fix)"
 miss=""
 F="$ROOT/scripts/test-similarity.mjs"

@@ -135,10 +135,20 @@ async function main() {
   const auditArgs = ['--path', ARGS.path];
   if (ARGS.dryRun) auditArgs.push('--dry-run');
 
+  // iter 65 — measure parallel batch wall-clock so a future iter that
+  // accidentally serializes (await audit-list; await oia-audit) doesn't
+  // silently regress. timing.parallelSpeedup is surfaced in payload.
+  const parallelStart = Date.now();
+  const listStart = Date.now();
+  const auditStart = Date.now();
   const [listResult, auditResult] = await Promise.all([
-    runScriptJsonAsync('audit-list.mjs', listArgs),
-    runScriptJsonAsync('oia-audit.mjs', auditArgs),
+    runScriptJsonAsync('audit-list.mjs', listArgs)
+      .then((r) => ({ ...r, durationMs: Date.now() - listStart })),
+    runScriptJsonAsync('oia-audit.mjs', auditArgs)
+      .then((r) => ({ ...r, durationMs: Date.now() - auditStart })),
   ]);
+  const parallelWallMs = Date.now() - parallelStart;
+  const parallelSumMs = (listResult.durationMs || 0) + (auditResult.durationMs || 0);
 
   if (listResult.exitCode !== 0) {
     emitAndExit({
@@ -215,6 +225,15 @@ async function main() {
     const payload = {
       adr: 'ADR-150 + ADR-152 §3.1',
       command: 'drift-from-history',
+      // iter 65 — parallel batch metrics. parallelSpeedup>1 means
+      // audit-list + oia-audit raced; ~1.0 means serial regression.
+      timing: {
+        parallelWallMs,
+        parallelSumMs,
+        parallelSpeedup: parallelSumMs > 0
+          ? Math.round((parallelSumMs / Math.max(parallelWallMs, 1)) * 100) / 100
+          : 0,
+      },
       baseline: {
         key: baseline.key,
         startedAt: baseline.startedAt ?? null,
